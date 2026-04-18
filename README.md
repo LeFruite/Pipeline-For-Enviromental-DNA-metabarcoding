@@ -3,8 +3,8 @@ I have been developing a pipeline for data validation and taxonomic identificati
 
 # How to install this file?
 Use this command to get my pipeline file.
-{git clone https://github.com/LeFruite/Pipeline-For-Enviromental-DNA-metabarcoding/tree/main/pipeline.sh}
+`git clone https://github.com/LeFruite/Pipeline-For-Enviromental-DNA-metabarcoding/tree/main/pipeline.sh`
 
 # How to run this pipeline?
 Use this command to run my pipeline.
-{./pipeline Your_file.fastq}
+`./pipeline Your_file.fastq`

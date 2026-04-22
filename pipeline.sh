@@ -3,12 +3,8 @@ set -e
 set -u
 
 # --- CONFIGURATION ---
-# Сurrently this part of code is custom made for my PC. If you want to use it, you probably need to configure it yourself
-DB_DIR="./databases" # This and next 2 variables are required to do allignment and taxonomic identification, if you are using local database
-BLAST_DB="${DB_DIR}/bold_db"
-TAXONOMY_MAP="${DB_DIR}/fasta_map.tsv"
-#R_SCRIPT="./visualize.R" #This code is for visualisation after the taxanomic identification was made. WIP 
-THREADS=45 #Number of threads, speeds up allignment. Need to make it customisable
+# Database and Thread variables are now set interactively below to make the script universal.
+# R_SCRIPT="./visualize.R" #This code is for visualisation after the taxanomic identification was made. WIP 
 
 # --- DEFAULT VARIABLES ---
 INTERACTIVE=true #Changed it to be always true, might change it back
@@ -58,16 +54,41 @@ else
     fi
 fi
 
+# Universal Prompts for Hardware and Databases
+# Tries to detect available cores, defaults to 4 if it fails.
+DEFAULT_THREADS=$(nproc 2>/dev/null || echo 4)
+read -p "Enter number of threads to use [Default $DEFAULT_THREADS]: " THREADS
+THREADS=${THREADS:-$DEFAULT_THREADS}
+
+# Only ask for database info if the pipeline steps require it (Step 3 or 4)
+if [ "$START_STEP" -le 4 ]; then
+    read -p "Enter path to the database directory [Default ./databases]: " DB_DIR
+    DB_DIR=${DB_DIR:-./databases}
+    BLAST_DB="${DB_DIR}/bold_db"
+    TAXONOMY_MAP="${DB_DIR}/fasta_map.tsv"
+fi
+
 # --- DIRECTORY SETUP ---
 BASENAME=$(basename "$CURRENT_INPUT")
 BASENAME="${BASENAME%.*}" 
 RESULT_DIR="results_${BASENAME}"
 mkdir -p "$RESULT_DIR"
 
+# Move the input file into the results directory
+if [ -f "$CURRENT_INPUT" ]; then
+    echo "Moving input file to $RESULT_DIR/ ..."
+    mv "$CURRENT_INPUT" "$RESULT_DIR/"
+    CURRENT_INPUT="${RESULT_DIR}/$(basename "$CURRENT_INPUT")"
+fi
+
 echo "=========================================="
 echo "Start Step: $START_STEP"
 echo "Input File: $CURRENT_INPUT"
 echo "Output Dir: $RESULT_DIR"
+echo "Threads:    $THREADS"
+if [ "$START_STEP" -le 4 ]; then
+    echo "DB Dir:     $DB_DIR"
+fi
 echo "=========================================="
 
 # --- HELPER FUNCTIONS ---
@@ -209,14 +230,14 @@ if [ "$START_STEP" -le 4 ]; then
 fi
 
 # ==============================================================================
-# STEP 5: FINAL FILTERING
+# STEP 5: FINAL FILTERING & CONGRUENCY CHECK (LCA)
 # ==============================================================================
 if [ "$START_STEP" -le 5 ]; then
     check_input
-    TEMP_UNIQUE="${RESULT_DIR}/${BASENAME}_unique.tsv"
     OUTPUT_FILE="${RESULT_DIR}/${BASENAME}_final.tsv"
+    CONFLICTS_FILE="${RESULT_DIR}/${BASENAME}_conflicts.tsv"
     
-    echo -e "\n[Step 5/6] Final Quality Filtering"
+    echo -e "\n[Step 5/6] Final Quality Filtering & Congruency Check"
     
     # Interactive Filtering Thresholds
     read -p "Enter minimum Percent Identity (Field 3) [Default 90]: " THRESH_PID
@@ -231,43 +252,136 @@ if [ "$START_STEP" -le 5 ]; then
     read -p "Enter minimum threshold for Field 10 [Default 80]: " THRESH_F10
     THRESH_F10=${THRESH_F10:-80}
 
-    echo "Applying filters: Identity >= ${THRESH_PID}, E-value <= ${THRESH_EVAL}, Bitscore > ${THRESH_BITS}, Field 10 >= ${THRESH_F10}..."
+    # Added delimiter prompt because BOLD/NCBI might separate taxonomy differently 
+    # (e.g., k_Animalia;p_Arthropoda vs k_Animalia,p_Arthropoda)
+    read -p "Enter taxonomy delimiter character (e.g., ';' or ',') [Default ';']: " TAX_DELIM
+    TAX_DELIM=${TAX_DELIM:-;}
 
-    # Deduplicate 
-    awk -F'\t' '!seen[$1]++' "$CURRENT_INPUT" > "$TEMP_UNIQUE"
-    
-    # Quality Filter passing user variables to awk
+    echo "Applying filters and calculating Lowest Common Ancestor (LCA) for conflicts..."
+
+    # Clear the conflicts file if it exists from a previous run
+    > "$CONFLICTS_FILE"
+
+    # Awk script to handle thresholds, grouping, conflicts, and LCA logic
     awk -v p="$THRESH_PID" -v e="$THRESH_EVAL" -v b="$THRESH_BITS" -v f10="$THRESH_F10" \
-        -F'\t' '($3 >= p) && ($5 <= e) && ($6 > b) && ($10 >= f10)' "$TEMP_UNIQUE" > "$OUTPUT_FILE"
+        -v tax_delim="$TAX_DELIM" -v final_out="$OUTPUT_FILE" -v conflict_out="$CONFLICTS_FILE" \
+        'BEGIN { FS="\t"; OFS="\t" }
+        {
+            # 1. Check if the line passes quality thresholds first
+            if ($3 >= p && $5 <= e && $6 > b && $10 >= f10) {
+                qseqid = $1
+                # Track unique queries to maintain order
+                if (!(qseqid in count)) {
+                    order[++num_queries] = qseqid
+                    count[qseqid] = 0
+                }
+                count[qseqid]++
+                idx = count[qseqid]
+                
+                # Store the full line and the taxonomy string (Field 11)
+                lines[qseqid, idx] = $0
+                taxonomies[qseqid, idx] = $11 
+            }
+        }
+        END {
+            for (i = 1; i <= num_queries; i++) {
+                qseqid = order[i]
+                c = count[qseqid]
 
+                if (c == 1) {
+                    # Only one valid hit, print straightforwardly to final
+                    print lines[qseqid, 1] > final_out
+                } else {
+                    # Multiple valid hits, check for congruency
+                    conflict = 0
+                    base_tax = taxonomies[qseqid, 1]
+
+                    for (j = 2; j <= c; j++) {
+                        if (taxonomies[qseqid, j] != base_tax) {
+                            conflict = 1
+                            break
+                        }
+                    }
+
+                    if (conflict == 0) {
+                        # All results agree perfectly, print the top hit
+                        print lines[qseqid, 1] > final_out
+                    } else {
+                        # CONFLICT DETECTED
+                        # Write all conflicting rows to the conflicts file
+                        for (j = 1; j <= c; j++) {
+                            print lines[qseqid, j] > conflict_out
+                        }
+
+                        # Calculate Lowest Common Ancestor (LCA)
+                        split(base_tax, lca_parts, tax_delim)
+                        lca_len = length(lca_parts)
+
+                        for (j = 2; j <= c; j++) {
+                            split(taxonomies[qseqid, j], current_parts, tax_delim)
+                            new_lca_len = 0
+                            
+                            # Compare taxonomy level by level
+                            for (k = 1; k <= lca_len && k <= length(current_parts); k++) {
+                                if (lca_parts[k] == current_parts[k]) {
+                                    new_lca_len++
+                                } else {
+                                    break # Stop at the first disagreement
+                                }
+                            }
+                            lca_len = new_lca_len
+                        }
+
+                        # Reconstruct LCA taxonomy string
+                        lca_tax = ""
+                        for (k = 1; k <= lca_len; k++) {
+                            lca_tax = lca_tax (k==1 ? "" : tax_delim) lca_parts[k]
+                        }
+                        if (lca_len == 0) lca_tax = "Unclassified_due_to_conflict"
+
+                        # Rebuild the top hit line with the new LCA taxonomy in Field 11
+                        split(lines[qseqid, 1], fields, FS)
+                        fields[11] = lca_tax
+                        
+                        mod_line = fields[1]
+                        for (k = 2; k <= length(fields); k++) {
+                            mod_line = mod_line FS fields[k]
+                        }
+                        print mod_line > final_out
+                    }
+                }
+            }
+        }' "$CURRENT_INPUT"
+
+    echo "Found conflicts saved to: $CONFLICTS_FILE"
     confirm "Final Filtering"
     CURRENT_INPUT="$OUTPUT_FILE"
 fi
 
 # ==============================================================================
-	
+    
 # STEP 6: VISUALIZATION (R)
-	
+    
 # ==============================================================================
-#	
+#   
 #if [ "$START_STEP" -le 6 ]; then
-#	
-#    check_input
-#	
-#    echo -e "\n[Step 6/6] Running R Visualization..."
-#	
+#   
+#   check_input
+#   
+#   echo -e "\n[Step 6/6] Running R Visualization..."
+#   
 #
-#	
-#    if command -v Rscript &> /dev/null; then
-#	
-#        Rscript "$R_SCRIPT" "$CURRENT_INPUT" "$RESULT_DIR"
-#	
-#    else
-#	
-#        echo "Warning: Rscript not found, skipping visualization."
-#	
-#    fi
-#	
+#   
+#   if command -v Rscript &> /dev/null; then
+#   
+#       Rscript "$R_SCRIPT" "$CURRENT_INPUT" "$RESULT_DIR"
+#   
+#   else
+#   
+#       echo "Warning: Rscript not found, skipping visualization."
+#   
+#   fi
+#   
 #fi
 echo -e "\n=== PIPELINE COMPLETE ==="
 echo "Final results in: $RESULT_DIR"

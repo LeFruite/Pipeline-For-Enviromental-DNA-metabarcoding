@@ -173,6 +173,7 @@ if [ "$START_STEP" -le 3 ]; then
     if [[ "$BLAST_MODE" == "remote" ]]; then
         echo "Running remote BLASTN against NCBI 'nt' database (This may take a while)..."
         blastn -query "$CURRENT_INPUT" -db nt -remote -out "$OUTPUT_FILE" \
+            -entrez_query ("CO1"[GENE] OR "COI"[GENE] OR "COX1"[GENE] OR "COXI"[GENE]) AND "Eukaryota"[ORGN] AND "BARCODE"[KYWD]\
             -outfmt "6 qseqid sseqid pident length evalue bitscore staxids sscinames sskingdoms stitle" \
             -max_target_seqs 10
     else

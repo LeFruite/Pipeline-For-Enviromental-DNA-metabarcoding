@@ -24,6 +24,14 @@ Use this command to get my pipeline file.\
 ```curl -L https://raw.githubusercontent.com/LeFruite/Pipeline-For-Enviromental-DNA-metabarcoding/main/pipeline.sh -o pipeline.sh```
 >or you can clone the whole folder
 
+## Dependencies
+Here is the list of algoritms that you will also have to install.\
+```sudo apt update``` 
+```sudo apt install fastp seqtk seqkit ncbi-blast+ r-base gawk coreutils```
+
+
 ## How to run this pipeline?
+Most likely you will need to modify your file so it will have permission to do this. Before use, write this command.\
+```chmod +x pipeline.sh```
 Use this command to run my pipeline.\
-```./pipeline Your_file.fastq```
+```./pipeline.sh Your_file.fastq```

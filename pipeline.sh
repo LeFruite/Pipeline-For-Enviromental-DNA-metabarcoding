@@ -173,8 +173,8 @@ if [ "$START_STEP" -le 3 ]; then
     if [[ "$BLAST_MODE" == "remote" ]]; then
         echo "Running remote BLASTN against NCBI 'nt' database (This may take a while)..."
         blastn -query "$CURRENT_INPUT" -db nt -remote -out "$OUTPUT_FILE" \
-    -entrez_query '("CO1"[GENE] OR "COI"[GENE] OR "COX1"[GENE] OR "COXI"[GENE]) AND "Eukaryota"[ORGN] AND "BARCODE"[KYWD]' \
-    -outfmt "6 qseqid sseqid pident length evalue bitscore staxids sscinames sskingdoms stitle" \
+    -entrez_query '("CO1"[GENE] OR "COI"[GENE] OR "COX1"[GENE] OR "COXI"[GENE])' \
+    -outfmt "6 qseqid sseqid pident length evalue bitscore" \
     -max_target_seqs 10
     else
         echo "Running local BLASTN..."
@@ -183,8 +183,9 @@ if [ "$START_STEP" -le 3 ]; then
             exit 1
         fi
         
+        # CHANGED: Removed staxids, sscinames, sskingdoms, stitle from local blastn
         blastn -query "$CURRENT_INPUT" -db "$BLAST_DB" -out "$OUTPUT_FILE" \
-            -outfmt "6 qseqid sseqid pident length evalue bitscore staxids sscinames sskingdoms stitle" \
+            -outfmt "6 qseqid sseqid pident length evalue bitscore" \
             -max_target_seqs 10 -num_threads "$THREADS"
     fi
 
@@ -231,7 +232,7 @@ if [ "$START_STEP" -le 4 ]; then
 fi
 
 # ==============================================================================
-# STEP 5: FINAL FILTERING & CONGRUENCY CHECK (LCA)
+# STEP 5: FINAL FILTERING & CONGRUENCY CHECK (NO LCA)
 # ==============================================================================
 if [ "$START_STEP" -le 5 ]; then
     check_input
@@ -241,37 +242,29 @@ if [ "$START_STEP" -le 5 ]; then
     echo -e "\n[Step 5/6] Final Quality Filtering & Congruency Check"
     
     # Interactive Filtering Thresholds
-    read -p "Enter minimum Percent Identity (Field 3) [Default 90]: " THRESH_PID
-    THRESH_PID=${THRESH_PID:-90}
+    read -p "Enter minimum Percent Identity (Field 3) [Default 95]: " THRESH_PID
+    THRESH_PID=${THRESH_PID:-95}
 
-    read -p "Enter maximum E-value (Field 5) [Default 1e-18]: " THRESH_EVAL
-    THRESH_EVAL=${THRESH_EVAL:-1e-18}
+    read -p "Enter maximum E-value (Field 5) [Default 1e-6]: " THRESH_EVAL
+    THRESH_EVAL=${THRESH_EVAL:-1e-6}
 
-    read -p "Enter minimum Bitscore (Field 6) [Default 120]: " THRESH_BITS
-    THRESH_BITS=${THRESH_BITS:-120}
+    read -p "Enter minimum Bitscore (Field 6) [Default 180]: " THRESH_BITS
+    THRESH_BITS=${THRESH_BITS:-180}
 
-    read -p "Enter minimum threshold for Field 10 [Default 80]: " THRESH_F10
-    THRESH_F10=${THRESH_F10:-80}
+    echo "Applying filters and separating conflicts..."
 
-    # Added delimiter prompt because BOLD/NCBI might separate taxonomy differently 
-    # (e.g., k_Animalia;p_Arthropoda vs k_Animalia,p_Arthropoda)
-    read -p "Enter taxonomy delimiter character (e.g., ';' or ',') [Default ';']: " TAX_DELIM
-    TAX_DELIM=${TAX_DELIM:-;}
-
-    echo "Applying filters and calculating Lowest Common Ancestor (LCA) for conflicts..."
-
-    # Clear the conflicts file if it exists from a previous run
+    # Clear files before starting
+    > "$OUTPUT_FILE"
     > "$CONFLICTS_FILE"
 
-    # Awk script to handle thresholds, grouping, conflicts, and LCA logic
-    awk -v p="$THRESH_PID" -v e="$THRESH_EVAL" -v b="$THRESH_BITS" -v f10="$THRESH_F10" \
-        -v tax_delim="$TAX_DELIM" -v final_out="$OUTPUT_FILE" -v conflict_out="$CONFLICTS_FILE" \
+    # Awk script to handle thresholds and separate conflicts
+    awk -v p="$THRESH_PID" -v e="$THRESH_EVAL" -v b="$THRESH_BITS" \
+        -v final_out="$OUTPUT_FILE" -v conflict_out="$CONFLICTS_FILE" \
         'BEGIN { FS="\t"; OFS="\t" }
         {
-            # 1. Check if the line passes quality thresholds first
-            if ($3 >= p && $5 <= e && $6 > b && $10 >= f10) {
+            # 1. Quality Filter (Evaluating cols 3, 5, and 6)
+            if ($3 >= p && $5 <= e && $6 > b) {
                 qseqid = $1
-                # Track unique queries to maintain order
                 if (!(qseqid in count)) {
                     order[++num_queries] = qseqid
                     count[qseqid] = 0
@@ -279,9 +272,9 @@ if [ "$START_STEP" -le 5 ]; then
                 count[qseqid]++
                 idx = count[qseqid]
                 
-                # Store the full line and the taxonomy string (Field 11)
+                # Store hits and taxonomy (Taxonomy is now in Column 7)
                 lines[qseqid, idx] = $0
-                taxonomies[qseqid, idx] = $11 
+                taxonomies[qseqid, idx] = $7 
             }
         }
         END {
@@ -290,10 +283,10 @@ if [ "$START_STEP" -le 5 ]; then
                 c = count[qseqid]
 
                 if (c == 1) {
-                    # Only one valid hit, print straightforwardly to final
+                    # Only one hit: goes to final
                     print lines[qseqid, 1] > final_out
                 } else {
-                    # Multiple valid hits, check for congruency
+                    # Multiple hits: check for taxonomy agreement
                     conflict = 0
                     base_tax = taxonomies[qseqid, 1]
 
@@ -305,60 +298,24 @@ if [ "$START_STEP" -le 5 ]; then
                     }
 
                     if (conflict == 0) {
-                        # All results agree perfectly, print the top hit
+                        # No conflict: All hits agree. 
+                        # We print the top hit to the final file.
                         print lines[qseqid, 1] > final_out
                     } else {
-                        # CONFLICT DETECTED
-                        # Write all conflicting rows to the conflicts file
+                        # CONFLICT: Write all records for this query to conflicts file
                         for (j = 1; j <= c; j++) {
                             print lines[qseqid, j] > conflict_out
                         }
-
-                        # Calculate Lowest Common Ancestor (LCA)
-                        split(base_tax, lca_parts, tax_delim)
-                        lca_len = length(lca_parts)
-
-                        for (j = 2; j <= c; j++) {
-                            split(taxonomies[qseqid, j], current_parts, tax_delim)
-                            new_lca_len = 0
-                            
-                            # Compare taxonomy level by level
-                            for (k = 1; k <= lca_len && k <= length(current_parts); k++) {
-                                if (lca_parts[k] == current_parts[k]) {
-                                    new_lca_len++
-                                } else {
-                                    break # Stop at the first disagreement
-                                }
-                            }
-                            lca_len = new_lca_len
-                        }
-
-                        # Reconstruct LCA taxonomy string
-                        lca_tax = ""
-                        for (k = 1; k <= lca_len; k++) {
-                            lca_tax = lca_tax (k==1 ? "" : tax_delim) lca_parts[k]
-                        }
-                        if (lca_len == 0) lca_tax = "Unclassified_due_to_conflict"
-
-                        # Rebuild the top hit line with the new LCA taxonomy in Field 11
-                        split(lines[qseqid, 1], fields, FS)
-                        fields[11] = lca_tax
-                        
-                        mod_line = fields[1]
-                        for (k = 2; k <= length(fields); k++) {
-                            mod_line = mod_line FS fields[k]
-                        }
-                        print mod_line > final_out
                     }
                 }
             }
         }' "$CURRENT_INPUT"
 
-    echo "Found conflicts saved to: $CONFLICTS_FILE"
+    echo "Clean results saved to: $OUTPUT_FILE"
+    echo "Conflicting results saved to: $CONFLICTS_FILE"
     confirm "Final Filtering"
     CURRENT_INPUT="$OUTPUT_FILE"
 fi
-
 # ==============================================================================
     
 # STEP 6: VISUALIZATION (R)

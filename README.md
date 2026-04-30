@@ -18,7 +18,6 @@ To ensure accuracy, the final results are filtered based on high-confidence metr
 ## Installation
 You can download the pipeline script directly using curl:\
 ```curl -L https://raw.githubusercontent.com/LeFruite/Pipeline-For-Enviromental-DNA-metabarcoding/main/pipeline.sh -o pipeline.sh```
->Alternatively, you can clone the entire repository from GitHub.
 
 ## Dependencies
 Ensure you have the following tools installed on your system:\

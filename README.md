@@ -1,37 +1,33 @@
-# Pipeline-For-Enviromental-DNA-metabarcoding
-I have been developing a pipeline for data validation and taxonomic identification of sequencing data. This pipeline is utilising algorithms written in the Bash shell language.\
-**You should use pipeline.sh for completed product, down below will be command to install it**
-## What does it do exactly?
-This is a step by step system that transforms the raw FastQ file into a file with completed taxonomic identification.
+# Pipeline-for-Environmental-DNA-(eDNA)-Metabarcoding
+This pipeline automates data validation and taxonomic identification for sequencing data. The system is built using Bash, leveraging industry-standard bioinformatics tools for efficiency and speed.\
+**You should use "pipeline.sh" file for completed product, down below will be command to install it**
+## Overview
+This is a step-by-step system that transforms raw FASTQ files into filtered files with completed taxonomic identifications.
 
 ### Step 1
-It takes FastaQ file and filters it by quality, you may change you desired Phred score, but it filters everything lower than 20 by default. During this step a file with useful statistics is generated, which you may look up.
-
+The pipeline processes the raw FASTQ file and filters reads based on quality. While the Phred score threshold is customizable, it defaults to 20. This step also generates a summary statistics file for quality control review.
 ### Step 2
-It converts FastaQ into Fasta file. Also it filters by sequence length, to cut down short a long sequences. The length can be inputed.
-
+Converts FASTQ to FASTA format. It also filters sequences by length to remove outliers (reads that are too short or too long). The desired length range is user-defined.
 ### Step 3
-Using BlastN we allign sequences in the file to the reference database. You can use both local and remote database.
-
+Using BLASTn, the pipeline aligns sequences against a reference database. This supports both local and remote database queries.
 ### Step 4
-Using .tsv of taxanomic allignment results, we take taxonomy and apply it to our results
-
+The pipeline parses the .tsv alignment results to map specific taxonomy to the sequence data.
 ### Step 5
-It filters those results, so that only most probable are left. It filters by: % identity, e-value, length and score. 
+To ensure accuracy, the final results are filtered based on high-confidence metrics: % identity, e-value, length, and bit-score.
 
-## How to install this file?
-Use this command to get my pipeline file.\
+## Installation
+You can download the pipeline script directly using curl:\
 ```curl -L https://raw.githubusercontent.com/LeFruite/Pipeline-For-Enviromental-DNA-metabarcoding/main/pipeline.sh -o pipeline.sh```
->or you can clone the whole folder
+>Alternatively, you can clone the entire repository from GitHub.
 
 ## Dependencies
-Here is the list of algoritms that you will also have to install.\
+Ensure you have the following tools installed on your system:\
 ```sudo apt update``` 
 ```sudo apt install fastp seqtk seqkit ncbi-blast+ r-base gawk coreutils```
 
 
 ## How to run this pipeline?
-Most likely you will need to modify your file so it will have permission to do this. Before use, write this command.\
+Before running the pipeline for the first time, you must grant the script execution permissions:\
 ```chmod +x pipeline.sh```
-Use this command to run my pipeline.\
+To execute the pipeline, run the following command followed by your input file:\
 ```./pipeline.sh Your_file.fastq```
